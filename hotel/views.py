@@ -17,8 +17,8 @@ def webhook(request, pms_name):
     """
 
     pms_cls = pms_systems.get_pms(pms_name)
-
-    cleaned_webhook_payload = pms_cls.clean_webhook_payload(request.body)
+    cleaned_webhook_payload = pms_cls.clean_webhook_payload(request.body.decode("utf-8")) # small addition to ensure we get valid python utf8 string from request body
+#    print (cleaned_webhook_payload) # DEBUG
     if not cleaned_webhook_payload:
         return HttpResponse(status=400)
     hotel = Hotel.objects.get(id=cleaned_webhook_payload["hotel_id"])

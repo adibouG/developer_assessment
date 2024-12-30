@@ -6,9 +6,9 @@ This repository contains working Django code. Run your code locally, you don't n
 - install dependencies by running: `pip install -r requirements.txt`
 
 ## Migrate database and run server
-`python manage.py migrate`
-`python manage.py runserver 0.0.0.0:8000`
-`python manage.py test`
+`python3.11 manage.py migrate`
+`python3.11 manage.py runserver 0.0.0.0:8000`
+`python3.11 manage.py test`
 
 ## Relevant information
 - The file `views.py` contains a webhook endpoint to receive updates from the PMS. These updates don't contain any details of the actual reservations. They require you to fetch additional details of any reservation.
