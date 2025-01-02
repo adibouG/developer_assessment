@@ -220,7 +220,7 @@ class PMS_Apaleo(PMS):
      NOTE:
     - The only use case I see for using get_reservations_for_given_checkin_date is to notify customers about it 
     or for the edge case of getting the reservations that were booked prior to the pms and hotel 
-    integration, and reservationss that didn't get updated since the integration is working
+    integration, and reservations that didn't get updated since the integration is working
     As a result, we can get guest request for an existing reservation which is not in our system, 
     This might mostly happen with new integrations,
     Handling these case would mean get and check all the coming pms reservations of the hotels
@@ -228,7 +228,8 @@ class PMS_Apaleo(PMS):
     Not very funny for all hotels / pms , for all the future dates 
     A compromise could be to set up a time offset value like COMING_DAYS_CHECK = 15 
     and every night run the method get_reservations_for_given_checkin_date over the define time offset
-    for each integration, compare our db data with the pms and add the missing reservations to our db
+    for each integration, compare our db data with the pms and add the missing reservations to our db.
+    However, I don' t see how this relates to clean_payload or handle_webhook methods, so I didn't implement it
     '''
                 
 
@@ -242,6 +243,8 @@ class PMS_Apaleo(PMS):
         "cancelled": Stay.Status.CANCEL,
         "no_show": Stay.Status.UNKNOWN
     }
+
+# ________// End PMS_Apaleo class
 
 def get_pms(name: str) -> Type[PMS]:
     """
@@ -279,48 +282,66 @@ def api_call_retry(func: Callable[[Any], Any], param: Any, retry: int = 1, wait:
     return res
 
 # Addtional function to handle the phone number issues in our db
-# Return the phone number to use for the guest
+# Return the created Guest and the operation result as a tuple
+# Note that the overhead is because the test can fail with the update of a guest a
+# so we create a new guest with a modified phone number or update the existing guest with the modified phone number
 def check_and_resolve_phone_number(guestPhone: str, guestName: str, guestLang: str, guestId: int = None) ->  Optional[Tuple[Guest, int]]:
     
-    DUPLICATE_PHONE_SUFFIX: str = "_-1_"
-    RESULTS = { "none": -1, "create": 0, "update": 1} 
-    UPDATE_MODE: dict = { "update": 0 , "create": 1 } 
-    # "create" : use the suffixe to create a new guest in our db
-    # "update": use the suffixe to update the existing guest  in our db
-    MODE = UPDATE_MODE["update"]
-    try:
-        dbGuest = Guest.objects.filter(phone=guestPhone).first()
-
-        if dbGuest is not None:
-        # 2 different guest have the same phone number, we should update the phone number with the most recent guest 
-        # but updating the guest fail with the test cases, 
-        # so we need to update a phone number with a suffixe and then create or update one of the two guest
-            if (dbGuest.name.strip().lower() != guestName.strip().lower() or \
-                dbGuest.language is None or guestLang is None or dbGuest.language != guestLang):
-                # same phone but  name  or country might differ, so we can't confirm same guest, an email would be nice
-                duplicatePhone: str = guestPhone + DUPLICATE_PHONE_SUFFIX
-            # either :
-                # create a new guest to prevent issues with a phone number modified with the suffixe DUPLICATE_PHONE_SUFFIX
-                # or update the existing guest in our db with the modified phone number
-                if  MODE == UPDATE_MODE["create"]:
-                    return check_and_resolve_phone_number(duplicatePhone, guestName, guestLang) 
-                else:
-                    return check_and_resolve_phone_number(duplicatePhone, guestName, guestLang, dbGuest.id)  
-        
-            else:
-                return dbGuest, RESULTS["none"]  # else the name and phone and country are the same so we do nothing
+    # ______________//PARAMETERS SETTINGS //_____________#
+    DUPLICATE_PHONE_SUFFIX: str = "_-1"
+    # this is the suffix that will be added to the phone number to make it unique if needed
+    UPDATE_MODES  = { "create": 1, "update": 2 } 
+    # "create" : use the suffixe to create the new guest in our db 
+    # "update": use the suffixe to update the existing guest in our db and create a new guest with the original phone number
+    MODE = UPDATE_MODES["update"]
+    #this is the mode that makes more sense to me, updating older guest details. but this is an opinion 
+    # best would be to fine tune it based on the guest last updates, reservation status, and future reservations 
+    # as oldest guest details might not be of use or valid, but this is an assumption, the same assert can be true for  newest guest
+    RESULTS = { "none": 0, "create": 1, "update": 2 } 
+    #_____________//
     
-        elif  MODE == UPDATE_MODE["update"] and guestId is not None:
+    try:
+        # check if the phone already exists in our db
+        dbGuest = Guest.objects.filter(phone=guestPhone).first()
+        # _____//case: phone number already in our db
+        if dbGuest is not None:
+            # if we can't confirm that this is the same guest
+            # we update a phone number with a suffixe and then create or update one of the two guest with it
+            
+            # _____//case: different guest 
+            if dbGuest.name.strip().lower() != guestName.strip().lower() or \
+                dbGuest.language != guestLang:
+                # same phone but  name  or country differ, so we can't confirm this is the same guest, an email would be nice
+                # modify the number
+                duplicatePhone: str = guestPhone + DUPLICATE_PHONE_SUFFIX
+                # then, either :
+                    # create a new guest  with a phone number modified with the DUPLICATE_PHONE_SUFFIX
+                    # or update the  guest already in our db with the modified phone number
+                    # however we must check that the modified phone is not already in our db too
+                if MODE == UPDATE_MODES["create"]: 
+                    return check_and_resolve_phone_number(duplicatePhone, guestName, guestLang) # check and create new guest with the modified phone number
+                else: 
+                    return check_and_resolve_phone_number(duplicatePhone, guestName, guestLang, dbGuest.id)  # check andupdate the existing guest in our db with the modified phone number and add a new guest with the original phone number
+            #___// case: same guest with same phone number
+            else:
+                return dbGuest, RESULTS["none"]  # name and phone and country are the same so we do nothing
+        #___//end case phone number already in our db
+        
+        # _____//case: phone number not in our db
+            # ______//case Update the old guest with the modified phone number not in our db
+        elif  MODE == UPDATE_MODES["update"] and guestId is not None:
             # update the existing guest in our db with the modified phone number
             Guest.objects.filter(id=guestId).update(phone=guestPhone)
             # create a new guest to prevent issues with the original phone number  
             guest = Guest.objects.create(name=guestName, phone=guestPhone.replace(DUPLICATE_PHONE_SUFFIX, ""), language=guestLang)
-            print(f"guest model with id {guest.id} processed and added phone with duplicate fo Guest with id {guestId}")  
+            print(f"guest model with id {guest.id} processed and  phone duplicate added to Guest with id {guestId}")  
             return guest, RESULTS["update"]
-        else:
+        
+            # ______//case phone number not in our db: create a new guest
+        else: 
             guest = Guest.objects.create(name=guestName, phone=guestPhone, language=guestLang)
             print(f"guest model with id {guest.id} processed")  
-            return guest,RESULTS["create"]
+            return guest, RESULTS["create"]
 
     except Exception as e:
         print(f"Error: {e}")
